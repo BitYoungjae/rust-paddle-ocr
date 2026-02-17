@@ -49,7 +49,7 @@ default-features = false
 targets = ["x86_64-unknown-linux-gnu"]
 
 [lib]
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib"]
 
 [build-dependencies]
 cmake = "0.1"
