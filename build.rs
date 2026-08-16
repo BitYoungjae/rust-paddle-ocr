@@ -123,6 +123,31 @@ fn get_mnn_source(manifest_dir: &PathBuf) -> PathBuf {
     local_mnn
 }
 
+/// Returns true when `#include <limits>` fails under `-D__STRICT_ANSI__`, which is how the
+/// GCC 16 + libstdc++ 16 `numeric_limits<__int128>` redefinition shows up.
+fn strict_ansi_limits_is_broken() -> bool {
+    let Ok(out_dir) = env::var("OUT_DIR") else {
+        return false;
+    };
+    let probe = PathBuf::from(out_dir).join("strict_ansi_limits_probe.cpp");
+    if fs::write(&probe, "#include <limits>\n").is_err() {
+        return false;
+    }
+
+    let compiler = cc::Build::new().cpp(true).get_compiler();
+    let broken = compiler
+        .to_command()
+        .arg("-D__STRICT_ANSI__")
+        .arg("-fsyntax-only")
+        .arg(&probe)
+        .output()
+        .map(|probe_result| !probe_result.status.success())
+        .unwrap_or(false);
+
+    let _ = fs::remove_file(&probe);
+    broken
+}
+
 fn build_mnn_with_cmake(
     mnn_source_dir: &PathBuf,
     arch: &str,
@@ -225,6 +250,16 @@ fn build_mnn_with_cmake(
             // Simulator
             config.define("CMAKE_OSX_ARCHITECTURES", "x86_64");
         }
+    }
+
+    // MNN's CMakeLists adds `-D__STRICT_ANSI__` on Linux, and libstdc++ 16 assumes that implies
+    // the compiler does not predefine `__GLIBCXX_TYPE_INT_N_0`. GCC 16 still predefines it, so
+    // `<limits>` specializes `numeric_limits<__int128>` twice and the build fails with
+    // "redefinition of 'struct std::numeric_limits<__int128>'". Undefining the macro leaves the
+    // `__STRICT_ANSI__` specialization as the only one. Only apply it to toolchains that actually
+    // break, so unaffected ones keep their existing `__int128` specializations.
+    if os == "linux" && strict_ansi_limits_is_broken() {
+        config.cxxflag("-U__GLIBCXX_TYPE_INT_N_0");
     }
 
     // SIMD optimizations
